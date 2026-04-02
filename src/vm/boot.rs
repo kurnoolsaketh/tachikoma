@@ -75,16 +75,26 @@ async fn poll_for_ip(
 
         let wait = wait_chunk.min(remaining.as_secs().max(1));
 
-        match tart.ip_wait(vm_name, wait).await {
+        // Try ARP resolver first — works without DHCP/bootpd (e.g. GitHub Actions runners)
+        match tart.ip_wait_arp(vm_name, wait).await {
             Ok(Some(ip)) => {
-                tracing::debug!("VM '{vm_name}' acquired IP: {ip}");
+                tracing::debug!("VM '{vm_name}' acquired IP via ARP: {ip}");
                 return Ok(ip);
             }
-            Ok(None) => {
-                tracing::trace!("VM '{vm_name}' has no IP yet, retrying...");
-            }
-            Err(e) => {
-                tracing::trace!("Error polling IP for '{vm_name}': {e}");
+            _ => {
+                // Fall back to default (DHCP) resolver
+                match tart.ip_wait(vm_name, wait).await {
+                    Ok(Some(ip)) => {
+                        tracing::debug!("VM '{vm_name}' acquired IP via DHCP: {ip}");
+                        return Ok(ip);
+                    }
+                    Ok(None) => {
+                        tracing::trace!("VM '{vm_name}' has no IP yet, retrying...");
+                    }
+                    Err(e) => {
+                        tracing::trace!("Error polling IP for '{vm_name}': {e}");
+                    }
+                }
             }
         }
     }
@@ -139,7 +149,7 @@ mod tests {
 
         let mut mock_tart = MockTartRunner::new();
         mock_tart
-            .expect_ip_wait()
+            .expect_ip_wait_arp()
             .returning(move |_, _| Ok(Some(ip)));
 
         let mut mock_ssh = MockSshClient::new();
@@ -158,13 +168,16 @@ mod tests {
     #[tokio::test]
     async fn test_ip_takes_a_few_polls() {
         let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 64, 10));
-        let call_count = AtomicU32::new(0);
+        let arp_count = AtomicU32::new(0);
 
         let mut mock_tart = MockTartRunner::new();
-        mock_tart.expect_ip_wait().returning(move |_, _| {
-            let count = call_count.fetch_add(1, Ordering::SeqCst);
+        // ARP fails for first 2 attempts, then succeeds
+        mock_tart.expect_ip_wait_arp().returning(move |_, _| {
+            let count = arp_count.fetch_add(1, Ordering::SeqCst);
             if count < 2 { Ok(None) } else { Ok(Some(ip)) }
         });
+        // DHCP fallback also returns None (never reached after ARP succeeds)
+        mock_tart.expect_ip_wait().returning(|_, _| Ok(None));
 
         let mut mock_ssh = MockSshClient::new();
         mock_ssh.expect_check_port_open().returning(|_| Ok(true));
@@ -185,7 +198,7 @@ mod tests {
 
         let mut mock_tart = MockTartRunner::new();
         mock_tart
-            .expect_ip_wait()
+            .expect_ip_wait_arp()
             .returning(move |_, _| Ok(Some(ip)));
 
         let mut mock_ssh = MockSshClient::new();
@@ -208,6 +221,7 @@ mod tests {
     #[tokio::test]
     async fn test_ip_timeout() {
         let mut mock_tart = MockTartRunner::new();
+        mock_tart.expect_ip_wait_arp().returning(|_, _| Ok(None));
         mock_tart.expect_ip_wait().returning(|_, _| Ok(None));
 
         let mock_ssh = MockSshClient::new();
@@ -236,7 +250,7 @@ mod tests {
 
         let mut mock_tart = MockTartRunner::new();
         mock_tart
-            .expect_ip_wait()
+            .expect_ip_wait_arp()
             .returning(move |_, _| Ok(Some(ip)));
 
         let mut mock_ssh = MockSshClient::new();
