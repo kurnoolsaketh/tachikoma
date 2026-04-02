@@ -1,6 +1,6 @@
 pub mod boot;
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -220,27 +220,31 @@ impl<'a> VmOrchestrator<'a> {
                 let opts = self.build_run_opts(worktree_path, repo_root);
                 on_status("Starting VM...");
                 self.tart.run(&vm_name, &opts).await?;
-                on_status("Waiting for boot...");
-                let ip = match self.wait_boot(&vm_name).await {
-                    Ok(ip) => ip,
-                    Err(e) => {
-                        // Don't leave a ghost VM running — stop it so the user
-                        // doesn't have to manually clean up with tart stop/delete.
-                        tracing::warn!("Boot failed, stopping ghost VM '{vm_name}'");
-                        let _ = self.tart.stop(&vm_name).await;
-                        return Err(e);
-                    }
-                };
-                self.update_state(
-                    &vm_name,
-                    repo_name,
-                    branch,
-                    worktree_path,
-                    VmStatus::Running,
-                    Some(ip),
-                )
-                .await?;
-                Ok(SpawnResult::Created { name: vm_name, ip })
+                if !self.interactive {
+                    on_status("Waiting for boot...");
+                    let ip = match self.wait_boot(&vm_name).await {
+                        Ok(ip) => ip,
+                        Err(e) => {
+                            // Don't leave a ghost VM running — stop it so the user
+                            // doesn't have to manually clean up with tart stop/delete.
+                            tracing::warn!("Boot failed, stopping ghost VM '{vm_name}'");
+                            let _ = self.tart.stop(&vm_name).await;
+                            return Err(e);
+                        }
+                    };
+                    self.update_state(
+                        &vm_name,
+                        repo_name,
+                        branch,
+                        worktree_path,
+                        VmStatus::Running,
+                        Some(ip),
+                    )
+                        .await?;
+                    Ok(SpawnResult::Created { name: vm_name, ip })
+                } else {
+                    Ok(SpawnResult::Created { name: vm_name, ip: (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))) })
+                }
             }
         }
     }
