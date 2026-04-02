@@ -42,6 +42,12 @@ pub enum Command {
     },
     /// Execute a command in the VM
     Exec {
+        /// VM name (defaults to current branch VM)
+        #[arg(long)]
+        name: Option<String>,
+        /// Use tart exec instead of SSH (no network required)
+        #[arg(long)]
+        tart_exec: bool,
         /// Command and arguments to execute
         #[arg(last = true)]
         cmd: Vec<String>,

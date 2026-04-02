@@ -21,7 +21,7 @@ pub async fn run(
     interactive: bool,
     on_status: &dyn Fn(&str),
 ) -> Result<SpawnResult> {
-    let orch = VmOrchestrator::new(tart, ssh, git, state_store, config);
+    let orch = VmOrchestrator::new(tart, ssh, git, state_store, config, interactive);
 
     // Resolve branch and repo
     on_status("Resolving branch...");

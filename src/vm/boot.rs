@@ -13,6 +13,7 @@ pub struct BootConfig {
     pub backoff_factor: f64,
     pub timeout: Duration,
     pub ssh_user: String,
+    pub skip_ssh_check: bool,
 }
 
 impl Default for BootConfig {
@@ -23,6 +24,7 @@ impl Default for BootConfig {
             backoff_factor: 2.0,
             timeout: Duration::from_secs(120),
             ssh_user: "admin".to_string(),
+            skip_ssh_check: false,
         }
     }
 }
@@ -42,8 +44,11 @@ pub async fn wait_for_boot(
     // Phase 1: Wait for IP
     let ip = poll_for_ip(tart, vm_name, config, deadline).await?;
 
-    // Phase 2: Wait for SSH port to be reachable (not auth — keys are injected during provisioning)
-    poll_for_ssh_port(ssh, ip, config, deadline).await?;
+    // Phase 2: Wait for SSH port to be reachable (not auth — keys are injected during provisioning).
+    // Skipped in non-interactive mode where tart exec is used instead of SSH.
+    if !config.skip_ssh_check {
+        poll_for_ssh_port(ssh, ip, config, deadline).await?;
+    }
 
     Ok(ip)
 }

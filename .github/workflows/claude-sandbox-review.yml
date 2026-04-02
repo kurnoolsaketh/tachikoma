@@ -84,8 +84,8 @@ jobs:
 
       - name: Build tachikoma from source
         run: |
-          git clone --branch improvement/add-non-interactive-mode --depth 1 \
-            https://github.com/ClickHouse/tachikoma.git /tmp/tachikoma-build
+          git clone --branch testing/ci --depth 1 \
+            https://github.com/kurnoolsaketh/tachikoma.git /tmp/tachikoma-build
           cd /tmp/tachikoma-build
           cargo build --release
           cp target/release/tachikoma /usr/local/bin/tachikoma
@@ -154,22 +154,35 @@ jobs:
 
       # ── 10. Spawn VM ────────────────────────────────────────────────────────────
       - name: Spawn tachikoma VM
+        id: spawn
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: tachikoma spawn "${{ steps.pr-branch.outputs.name }}" --no-interactive
+        run: |
+          BRANCH="${{ steps.pr-branch.outputs.name }}"
+          tachikoma spawn "$BRANCH" --no-interactive
+
+          # Derive the deterministic VM name using the same slugify logic as
+          # tachikoma (lib.rs): lowercase, replace non-alnum with -, collapse
+          # consecutive dashes, truncate to 63 chars, trim trailing dash.
+          REPO_NAME=$(basename "$PWD")
+          VM_NAME=$(echo "tachikoma-${REPO_NAME}-${BRANCH}" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/-$//' \
+            | cut -c1-63)
+          echo "vm_name=${VM_NAME}" >> "$GITHUB_OUTPUT"
 
       # ── 11. Execute Claude ──────────────────────────────────────────────────────
       - name: Run Claude review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          tachikoma exec -- claude --dangerously-skip-permissions \
+          tachikoma exec --name "${{ steps.spawn.outputs.vm_name }}" --tart-exec -- claude --dangerously-skip-permissions \
             -p "Read the review instructions and PR context from ~/code/.claude-review-prompt.md and follow them precisely."
 
       # ── 12. Cleanup ─────────────────────────────────────────────────────────────
       - name: Destroy VM
         if: always()
-        run: tachikoma destroy --force || true
+        run: tachikoma destroy "${{ steps.spawn.outputs.vm_name }}" --force || true
 
       # ── 13. Success reaction ────────────────────────────────────────────────────
       - name: Add success reaction

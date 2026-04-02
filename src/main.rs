@@ -144,13 +144,22 @@ async fn run(cli: Cli, mode: OutputMode) -> tachikoma::Result<()> {
             tachikoma::cmd::enter::run(&vm_name, &ssh, &state_store, &config.ssh_user).await?;
         }
 
-        Some(Command::Exec { cmd }) => {
-            let branch = git.current_branch(&cwd).await?;
-            let (repo_name, _) = resolve_repo(&git, &cwd).await?;
-            let vm_name = tachikoma::vm_name(&repo_name, &branch);
-            let output =
-                tachikoma::cmd::exec::run(&vm_name, &cmd, &ssh, &state_store, &config.ssh_user)
-                    .await?;
+        Some(Command::Exec {
+            cmd,
+            tart_exec,
+            name,
+        }) => {
+            let vm_name = resolve_vm_name(name, &git, &cwd).await?;
+            let output = tachikoma::cmd::exec::run(
+                &vm_name,
+                &cmd,
+                &tart,
+                &ssh,
+                &state_store,
+                &config.ssh_user,
+                tart_exec,
+            )
+            .await?;
             print!("{output}");
         }
 

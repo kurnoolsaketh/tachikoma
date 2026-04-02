@@ -54,6 +54,7 @@ pub struct VmOrchestrator<'a> {
     git: &'a dyn GitWorktree,
     state_store: &'a dyn StateStore,
     config: &'a Config,
+    interactive: bool,
 }
 
 impl<'a> VmOrchestrator<'a> {
@@ -63,6 +64,7 @@ impl<'a> VmOrchestrator<'a> {
         git: &'a dyn GitWorktree,
         state_store: &'a dyn StateStore,
         config: &'a Config,
+        interactive: bool,
     ) -> Self {
         Self {
             tart,
@@ -70,6 +72,7 @@ impl<'a> VmOrchestrator<'a> {
             git,
             state_store,
             config,
+            interactive,
         }
     }
 
@@ -316,6 +319,7 @@ impl<'a> VmOrchestrator<'a> {
         let boot_config = BootConfig {
             timeout: std::time::Duration::from_secs(self.config.boot_timeout_secs),
             ssh_user: self.config.ssh_user.clone(),
+            skip_ssh_check: !self.interactive,
             ..Default::default()
         };
         wait_for_boot(self.tart, self.ssh, vm_name, &boot_config).await
@@ -422,7 +426,7 @@ mod tests {
         let state_store = default_state_store();
 
         let config = test_config();
-        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config);
+        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config, true);
 
         let result = orch
             .spawn(
@@ -459,7 +463,7 @@ mod tests {
         let state_store = default_state_store();
 
         let config = test_config();
-        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config);
+        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config, true);
 
         let result = orch
             .spawn(
@@ -496,7 +500,7 @@ mod tests {
         let state_store = default_state_store();
 
         let config = test_config();
-        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config);
+        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config, true);
 
         let result = orch
             .spawn(
@@ -533,7 +537,7 @@ mod tests {
         let state_store = default_state_store();
 
         let config = test_config();
-        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config);
+        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config, true);
 
         let result = orch
             .spawn(
@@ -557,7 +561,7 @@ mod tests {
         let state_store = MockStateStore::new();
         let config = test_config();
 
-        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config);
+        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config, true);
         let branch = orch
             .resolve_branch(Some("feature/x"), Path::new("/tmp"))
             .await
@@ -577,7 +581,7 @@ mod tests {
         let state_store = MockStateStore::new();
         let config = test_config();
 
-        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config);
+        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config, true);
         let branch = orch.resolve_branch(None, Path::new("/tmp")).await.unwrap();
         assert_eq!(branch, "main");
     }
@@ -606,7 +610,7 @@ mod tests {
             .returning(|_| Ok(()));
 
         let config = test_config();
-        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config);
+        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config, true);
 
         let result = orch
             .spawn(
@@ -639,7 +643,7 @@ mod tests {
         let mut config = test_config();
         config.boot_timeout_secs = 1; // fail fast
 
-        let orch = VmOrchestrator::new(&tart, &mock_ssh, &git, &state_store, &config);
+        let orch = VmOrchestrator::new(&tart, &mock_ssh, &git, &state_store, &config, true);
 
         let result = orch
             .spawn(
@@ -673,7 +677,7 @@ mod tests {
         let git = MockGitWorktree::new();
         let state_store = default_state_store();
 
-        let orchestrator = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config);
+        let orchestrator = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config, true);
 
         let opts = orchestrator.build_run_opts(&worktree, &repo_root);
         let code_mount = opts
@@ -711,7 +715,7 @@ mod tests {
             })
             .returning(|_, _, target| Ok(target.to_path_buf()));
 
-        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config);
+        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config, true);
         let result = orch
             .ensure_worktree(Path::new("/tmp/repo"), "main", "myrepo")
             .await
@@ -751,7 +755,7 @@ mod tests {
         // create_worktree should NOT be called — the linked worktree already exists
         // (mockall will panic if an unexpected call happens)
 
-        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config);
+        let orch = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config, true);
         let result = orch
             .ensure_worktree(Path::new("/tmp/repo"), "feature-x", "myrepo")
             .await
@@ -776,7 +780,7 @@ mod tests {
         let git = MockGitWorktree::new();
         let state_store = default_state_store();
 
-        let orchestrator = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config);
+        let orchestrator = VmOrchestrator::new(&tart, &ssh, &git, &state_store, &config, true);
 
         let opts = orchestrator.build_run_opts(&worktree, &repo_root);
         let dotgit = opts
