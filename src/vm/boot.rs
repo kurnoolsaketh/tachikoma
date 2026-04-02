@@ -140,6 +140,59 @@ async fn poll_for_ssh_port(
     }
 }
 
+/// Boot detection for non-interactive mode: poll `tart exec` until the guest agent is ready.
+/// No IP resolution or SSH needed — only the VM name.
+pub async fn wait_for_boot_tart_exec(
+    tart: &dyn TartRunner,
+    vm_name: &str,
+    config: &BootConfig,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + config.timeout;
+    poll_for_tart_exec(tart, vm_name, config, deadline).await
+}
+
+async fn poll_for_tart_exec(
+    tart: &dyn TartRunner,
+    vm_name: &str,
+    config: &BootConfig,
+    deadline: tokio::time::Instant,
+) -> Result<()> {
+    let mut delay = config.initial_delay;
+
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(crate::TachikomaError::Vm(format!(
+                "Timed out waiting for guest agent on VM '{vm_name}'.\n\
+                 The VM may still be booting. Try:\n  \
+                   tart exec {vm_name} echo ok\n  \
+                   tart list\n\
+                 If the VM is stuck, clean it up with: tachikoma destroy {vm_name}"
+            )));
+        }
+
+        tokio::time::sleep(delay).await;
+
+        match tart.exec(vm_name, vec!["echo".into(), "ok".into()]).await {
+            Ok(output) if output.exit_code == 0 => {
+                tracing::debug!("Guest agent ready on VM '{vm_name}'");
+                return Ok(());
+            }
+            Ok(output) => {
+                tracing::trace!(
+                    "tart exec not ready on '{vm_name}' (exit {}), retrying...",
+                    output.exit_code
+                );
+            }
+            Err(e) => {
+                tracing::trace!("tart exec error on '{vm_name}': {e}");
+            }
+        }
+
+        delay = Duration::from_secs_f64(delay.as_secs_f64() * config.backoff_factor)
+            .min(config.max_interval);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +322,91 @@ mod tests {
         };
 
         let result = wait_for_boot(&mock_tart, &mock_ssh, "test-vm", &config).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Timed out"),
+            "Expected timeout error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tart_exec_boot_immediate() {
+        use crate::tart::types::ExecOutput;
+
+        let mut mock_tart = MockTartRunner::new();
+        mock_tart.expect_exec().returning(|_, _| {
+            Ok(ExecOutput {
+                stdout: "ok\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        });
+
+        let config = BootConfig {
+            timeout: Duration::from_secs(5),
+            ..Default::default()
+        };
+
+        let result = wait_for_boot_tart_exec(&mock_tart, "test-vm", &config).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_tart_exec_boot_takes_a_few_polls() {
+        use crate::tart::types::ExecOutput;
+
+        let count = AtomicU32::new(0);
+        let mut mock_tart = MockTartRunner::new();
+        mock_tart.expect_exec().returning(move |_, _| {
+            let n = count.fetch_add(1, Ordering::SeqCst);
+            if n < 2 {
+                Ok(ExecOutput {
+                    stdout: String::new(),
+                    stderr: "VM is not running".to_string(),
+                    exit_code: 2,
+                })
+            } else {
+                Ok(ExecOutput {
+                    stdout: "ok\n".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                })
+            }
+        });
+
+        let config = BootConfig {
+            initial_delay: Duration::from_millis(10),
+            max_interval: Duration::from_millis(20),
+            timeout: Duration::from_secs(5),
+            ..Default::default()
+        };
+
+        let result = wait_for_boot_tart_exec(&mock_tart, "test-vm", &config).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_tart_exec_boot_timeout() {
+        use crate::tart::types::ExecOutput;
+
+        let mut mock_tart = MockTartRunner::new();
+        mock_tart.expect_exec().returning(|_, _| {
+            Ok(ExecOutput {
+                stdout: String::new(),
+                stderr: "VM is not running".to_string(),
+                exit_code: 2,
+            })
+        });
+
+        let config = BootConfig {
+            initial_delay: Duration::from_millis(10),
+            max_interval: Duration::from_millis(20),
+            timeout: Duration::from_millis(100),
+            ..Default::default()
+        };
+
+        let result = wait_for_boot_tart_exec(&mock_tart, "test-vm", &config).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(

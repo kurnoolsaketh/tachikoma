@@ -12,7 +12,7 @@ use crate::state::{StateStore, VmEntry, VmStatus};
 use crate::tart::{DirMount, RunOpts, TartRunner, TartVmState};
 use crate::worktree::GitWorktree;
 
-use boot::{BootConfig, wait_for_boot};
+use boot::{BootConfig, wait_for_boot, wait_for_boot_tart_exec};
 
 /// Result of the spawn/connect orchestration
 #[derive(Debug)]
@@ -172,8 +172,7 @@ impl<'a> VmOrchestrator<'a> {
                 tracing::info!("Resuming suspended VM '{vm_name}'");
                 let opts = self.build_run_opts(worktree_path, repo_root);
                 self.tart.run(&vm_name, &opts).await?;
-                on_status("Waiting for boot...");
-                let ip = self.wait_boot(&vm_name).await?;
+                let ip = self.wait_boot_for_mode(&vm_name, on_status).await?;
                 self.update_state(
                     &vm_name,
                     repo_name,
@@ -191,8 +190,7 @@ impl<'a> VmOrchestrator<'a> {
                 tracing::info!("Starting stopped VM '{vm_name}'");
                 let opts = self.build_run_opts(worktree_path, repo_root);
                 self.tart.run(&vm_name, &opts).await?;
-                on_status("Waiting for boot...");
-                let ip = self.wait_boot(&vm_name).await?;
+                let ip = self.wait_boot_for_mode(&vm_name, on_status).await?;
                 self.update_state(
                     &vm_name,
                     repo_name,
@@ -220,31 +218,26 @@ impl<'a> VmOrchestrator<'a> {
                 let opts = self.build_run_opts(worktree_path, repo_root);
                 on_status("Starting VM...");
                 self.tart.run(&vm_name, &opts).await?;
-                if self.interactive {
-                    on_status("Waiting for boot...");
-                    let ip = match self.wait_boot(&vm_name).await {
-                        Ok(ip) => ip,
-                        Err(e) => {
-                            // Don't leave a ghost VM running — stop it so the user
-                            // doesn't have to manually clean up with tart stop/delete.
-                            tracing::warn!("Boot failed, stopping ghost VM '{vm_name}'");
-                            let _ = self.tart.stop(&vm_name).await;
-                            return Err(e);
-                        }
-                    };
-                    self.update_state(
-                        &vm_name,
-                        repo_name,
-                        branch,
-                        worktree_path,
-                        VmStatus::Running,
-                        Some(ip),
-                    )
-                        .await?;
-                    Ok(SpawnResult::Created { name: vm_name, ip })
-                } else {
-                    Ok(SpawnResult::Created { name: vm_name, ip: (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))) })
-                }
+                let ip = match self.wait_boot_for_mode(&vm_name, on_status).await {
+                    Ok(ip) => ip,
+                    Err(e) => {
+                        // Don't leave a ghost VM running — stop it so the user
+                        // doesn't have to manually clean up with tart stop/delete.
+                        tracing::warn!("Boot failed, stopping ghost VM '{vm_name}'");
+                        let _ = self.tart.stop(&vm_name).await;
+                        return Err(e);
+                    }
+                };
+                self.update_state(
+                    &vm_name,
+                    repo_name,
+                    branch,
+                    worktree_path,
+                    VmStatus::Running,
+                    Some(ip),
+                )
+                .await?;
+                Ok(SpawnResult::Created { name: vm_name, ip })
             }
         }
     }
@@ -317,6 +310,27 @@ impl<'a> VmOrchestrator<'a> {
             return Ok(ip);
         }
         self.wait_boot(vm_name).await
+    }
+
+    /// Wait for the VM to boot, using the appropriate strategy for the current mode.
+    /// - Interactive: full boot detection (IP resolution + SSH port check)
+    /// - Non-interactive: poll `tart exec` for guest agent readiness (no IP/SSH needed)
+    async fn wait_boot_for_mode(&self, vm_name: &str, on_status: &dyn Fn(&str)) -> Result<IpAddr> {
+        let boot_config = BootConfig {
+            timeout: std::time::Duration::from_secs(self.config.boot_timeout_secs),
+            ssh_user: self.config.ssh_user.clone(),
+            ..Default::default()
+        };
+
+        if self.interactive {
+            on_status("Waiting for boot...");
+            wait_for_boot(self.tart, self.ssh, vm_name, &boot_config).await
+        } else {
+            on_status("Waiting for guest agent...");
+            wait_for_boot_tart_exec(self.tart, vm_name, &boot_config).await?;
+            // No IP available in non-interactive mode; use loopback placeholder.
+            Ok(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))
+        }
     }
 
     async fn wait_boot(&self, vm_name: &str) -> Result<IpAddr> {
