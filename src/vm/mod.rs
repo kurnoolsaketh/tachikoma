@@ -220,7 +220,7 @@ impl<'a> VmOrchestrator<'a> {
                 let opts = self.build_run_opts(worktree_path, repo_root);
                 on_status("Starting VM...");
                 self.tart.run(&vm_name, &opts).await?;
-                if !self.interactive {
+                if self.interactive {
                     on_status("Waiting for boot...");
                     let ip = match self.wait_boot(&vm_name).await {
                         Ok(ip) => ip,
