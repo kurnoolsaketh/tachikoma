@@ -171,6 +171,15 @@ jobs:
             | cut -c1-63)
           echo "vm_name=${VM_NAME}" >> "$GITHUB_OUTPUT"
 
+      # ── 10b. Diagnostics (temporary) ─────────────────────────────────────────
+      - name: VM diagnostics
+        if: always()
+        run: |
+          echo "=== tart list ==="
+          tart list
+          echo "=== tart exec echo ok ==="
+          tart exec "${{ steps.spawn.outputs.vm_name }}" echo ok || echo "tart exec failed with exit $?"
+
       # ── 11. Execute Claude ──────────────────────────────────────────────────────
       - name: Run Claude review
         env:
